@@ -5,6 +5,7 @@
                 core_intrinsics,
                 ))]
 #![crate_name="itertools"]
+#![feature(slice_splits)]
 
 //! Itertools — extra iterator adaptors, functions and macros.
 //!
@@ -1206,6 +1207,57 @@ pub trait Itertools : Iterator {
     }
 }
 
+#[derive(Debug, Clone)]
+struct SortIter<T> {
+    greater: Vec<T>,
+    less: Option<Box<SortIter<T>>>,
+}
+
+impl<T: Ord> SortIter<T> {
+    fn split_greater(&mut self) -> Option<T> {
+        match self.greater.len() {
+            0 => None,
+            1 => self.greater.pop(),
+            _ => {
+                let split_idx = {
+                    let (pivot, rest) = self.greater.split_last_mut().unwrap();
+                    partition(rest, |el| el > pivot)
+                };
+                let pivot_idx = self.greater.len() - 1;
+                self.greater.swap(pivot_idx, split_idx);
+                let mut less = Box::new(SortIter {
+                    greater: self.greater.split_off(split_idx + 1),
+                    less: None
+                });
+                if let next @ Some(_) = less.next() { 
+                    self.less = Some(less);
+                    next
+                } else {
+                    self.greater.pop()
+                }
+            } 
+        }
+    }
+}
+
+impl<T: Ord> Iterator for SortIter<T> {
+    type Item = T;
+    fn next(&mut self) -> Option<T> {
+        let next = if let Some(ref mut less) = self.less {
+            less.next()
+        } else {
+            return self.split_greater();
+        };
+        if next.is_some() {
+            next
+        } else {
+            self.less = None;
+            self.greater.pop()
+        }
+    }
+
+}
+
 impl<T: ?Sized> Itertools for T where T: Iterator { }
 
 /// Return `true` if both iterators produce equal sequences
@@ -1344,4 +1396,26 @@ pub fn rev<I>(iterable: I) -> iter::Rev<I::IntoIter>
           I::IntoIter: DoubleEndedIterator,
 {
     iterable.into_iter().rev()
+}
+
+#[test]
+fn sort_iter() {
+    let mut v = vec![1, 2, 5, 3, 4, 0];
+    let sort_iter = SortIter {
+        greater: v.clone(),
+        less: None,
+    };
+    v.sort();
+    assert_eq!(v, sort_iter.collect::<Vec<_>>());
+}
+
+#[bench]
+fn test_min() {
+    let mut v = vec![1, 2, 5, 3, 4, 0];
+    let mut sort_iter = SortIter {
+        greater: v.clone(),
+        less: None,
+    };
+    v.sort();
+    assert_eq!(v.into_iter().min(), sort_iter.next());
 }
